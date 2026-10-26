@@ -1,46 +1,50 @@
-# Groww NIFTY Options Algo — repo-ready build
+# Groww Algo — clean Streamlit dashboard
 
-The GitHub repository supplied by the user was empty when checked. This source package is ready to upload into the repository root.
+A simplified, Groww-inspired UI for market overview, strategy signal, option-contract preview and position sizing.
 
-## Included
-- `app.py`: Streamlit live-data dashboard (Groww API required)
-- `worker.py`: persistent strategy worker; PAPER by default; guarded live order code
-- `dashboard.py`: worker database monitor
-- `engine.py`: Groww SDK data, 5-minute NIFTY candles, VWAP/EMA opening-range signal, ATM option-chain selection
-- `risk.py`: risk-based sizing
-- `requirements.txt`: dependencies
+## What works in this version
+- Streamlit dashboard with clean cards and tabs.
+- Groww API authentication via either a current access token or API key + TOTP secret.
+- 5-minute NIFTY historical candles, VWAP and EMA20.
+- Opening-range breakout signal.
+- ATM option-chain preview when the signal is directional.
+- Risk-based position-size calculator.
+- Optional persistent worker scaffold that logs signals only.
 
-## Important limitations
-This is a reference implementation, not a certified or production-validated trading system. It has not been tested with the user's Groww account or credentials. Do not turn on live trading without reviewing the code, testing SDK responses, validating lot size and product/order parameters, and testing failure scenarios. Local P&L is not a substitute for broker-confirmed P&L. Stops are monitored by the worker and are not guaranteed broker-side protective orders; if the worker/network goes down, exit logic can fail. For real use, prefer broker-supported protective/Smart Orders where appropriate and verify behavior.
+## What is not implemented
+- This version does **not** place live orders. `worker.py` logs signals only.
+- It does not guarantee profit or validate the strategy's edge.
+- It has not been tested with the user's specific Groww credentials/account. Verify SDK response formats and API access in paper mode before relying on it.
 
-₹5,000 profit per trade is not guaranteed. Strategy is an unproven breakout setup.
+## Deploy on Streamlit Community Cloud
+1. Upload the repository contents to the root of your GitHub repo.
+2. In Streamlit Community Cloud, create an app from the repo; main file path: `app.py`.
+3. Under app settings → Secrets, add:
+   ```toml
+   GROWW_API_KEY = "..."
+   GROWW_TOTP_SECRET = "..."
+   ```
+   Use the API/TOTP token and secret provided by Groww's Trading API page. Do not share them in chat or commit them to GitHub.
+4. Reboot the app.
 
-## Deploy dashboard
-1. Upload these files to GitHub repository root.
-2. In Streamlit Community Cloud, create app from repo and set main file to `app.py`.
-3. Add `GROWW_ACCESS_TOKEN` using Streamlit Secrets (never commit it).
-4. The dashboard fetches current 5-minute candles and displays a signal/ATM contract preview.
+If you have a valid access token instead, use `GROWW_ACCESS_TOKEN` instead of the two TOTP settings. Access tokens may expire, so check current Groww docs.
 
-## Run worker separately
-Do **not** run the worker as a background process inside Streamlit Community Cloud. Deploy it as a persistent worker on a VPS or worker-capable host. Streamlit is the UI; worker is the execution process.
-
+## Run locally
 ```bash
 pip install -r requirements.txt
-# configure environment variables using your host's secret manager
-python worker.py
+streamlit run app.py
 ```
 
-Worker defaults to paper mode. It logs simulated entries/exits into SQLite. For remote dashboard access, configure a shared persistent database/log store; a local SQLite file on the worker is not automatically available to Streamlit Cloud.
+## Worker scaffold
+Set the same auth variables as environment variables on a persistent host and run:
+```bash
+python worker.py
+```
+It only logs signals; it does not execute orders. Streamlit Community Cloud should be treated as the UI layer, not an always-on trading engine.
 
-## Live mode safety gate
-Live order placement requires both:
-- `LIVE_TRADING=true`
-- `LIVE_CONFIRM=I_UNDERSTAND`
-
-Do not set these until you have completed paper testing and reviewed the official Groww API docs. This gate is not a guarantee of safety. Verify all broker/exchange/SEBI rules and the active Groww API subscription.
-
-Official Groww docs:
+Official docs:
 - https://groww.in/trade-api/docs/python-sdk
 - https://groww.in/trade-api/docs/python-sdk/live-data
 - https://groww.in/trade-api/docs/python-sdk/orders
-- https://groww.in/trade-api/docs/python-sdk/backtesting
+
+Options trading is risky. Planned stop-loss is not guaranteed fill price; gaps, slippage, outages and rejected orders can cause larger losses.

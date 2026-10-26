@@ -69,22 +69,51 @@ def get_nifty_candles(groww, lookback_hours=8):
     df = pd.DataFrame(parsed, columns=["timestamp", "open", "high", "low", "close", "volume"])
     if df.empty:
         raise RuntimeError("Groww candle response did not contain valid OHLCV rows.")
-    # Support epoch timestamps or timestamp strings.
+    # Parse timestamps correctly. Epoch timestamps represent UTC instants;
+    # convert them to Indian Standard Time for session logic and display.
     if pd.api.types.is_numeric_dtype(df["timestamp"]):
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s", errors="coerce")
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s", utc=True, errors="coerce")
     else:
-        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+        parsed_ts = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+        df["timestamp"] = parsed_ts
+    df["timestamp"] = df["timestamp"].dt.tz_convert("Asia/Kolkata")
+
     for col in ["open", "high", "low", "close", "volume"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.dropna(subset=["timestamp", "open", "high", "low", "close"]).sort_values("timestamp")
     df = df.drop_duplicates("timestamp").reset_index(drop=True)
     if df.empty:
         raise RuntimeError("No valid candles after parsing Groww response.")
+
+    # Keep regular NSE cash-market hours only (09:15–15:30 IST), so overnight
+    # timestamps cannot distort the chart or opening-range strategy.
+    local_time = df["timestamp"].dt.time
+    session_mask = (
+        (local_time >= pd.Timestamp("09:15").time())
+        & (local_time <= pd.Timestamp("15:30").time())
+    )
+    df = df.loc[session_mask].copy().reset_index(drop=True)
+    if df.empty:
+        raise RuntimeError(
+            "Groww returned candles, but none fall within NSE regular market hours "
+            "(09:15–15:30 IST). Verify the API timestamp format/timezone."
+        )
+
+    # VWAP is calculated per trading day and requires positive volume. If volume
+    # is absent/zero, leave VWAP unavailable rather than inventing a value.
     typical = (df["high"] + df["low"] + df["close"]) / 3
     vol = df["volume"].fillna(0).clip(lower=0)
-    denom = vol.cumsum().replace(0, float("nan"))
-    df["vwap"] = (typical * vol).cumsum() / denom
-    df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
+    df["vwap"] = float("nan")
+    for session_date, idx in df.groupby(df["timestamp"].dt.date).groups.items():
+        session_vol = vol.loc[idx]
+        denominator = session_vol.cumsum()
+        numerator = (typical.loc[idx] * session_vol).cumsum()
+        valid = denominator > 0
+        df.loc[idx, "vwap"] = (numerator / denominator.where(valid)).to_numpy()
+
+    df["ema20"] = df.groupby(df["timestamp"].dt.date)["close"].transform(
+        lambda series: series.ewm(span=20, adjust=False).mean()
+    )
     return df
 
 def build_signal(candles):
@@ -97,6 +126,8 @@ def build_signal(candles):
     opening_high = float(session.loc[:2, "high"].max())
     opening_low = float(session.loc[:2, "low"].min())
     last, prev = session.iloc[-1], session.iloc[-2]
+    if pd.isna(last["vwap"]) or pd.isna(last["ema20"]):
+        return {"action": "WAIT", "reason": "VWAP/EMA is unavailable; candle volume or indicator data is incomplete."}
     if (last["close"] > opening_high and last["close"] > last["vwap"]
             and last["close"] > last["ema20"] and prev["close"] <= opening_high):
         return {"action": "CALL_BIAS", "reason": "Latest close broke above the first 15-minute range and is above VWAP/EMA20."}

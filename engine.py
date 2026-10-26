@@ -29,8 +29,12 @@ def _cached_candle_data(_client_marker, start_time, end_time):
     return None
 
 def get_nifty_candles(groww, lookback_hours=8):
+    # IMPORTANT: do not request only the last few hours. Before market open,
+    # overnight, or on a holiday that window can contain zero market candles.
+    # Groww allows a much longer range for 5-minute candles, so request 10
+    # calendar days and use the most recent returned trading-session candles.
     end = datetime.now()
-    start = end - timedelta(hours=lookback_hours)
+    start = end - timedelta(days=10)
     response = groww.get_historical_candles(
         exchange=groww.EXCHANGE_NSE,
         segment=groww.SEGMENT_CASH,
@@ -39,9 +43,19 @@ def get_nifty_candles(groww, lookback_hours=8):
         end_time=end.strftime("%Y-%m-%d %H:%M:%S"),
         candle_interval=groww.CANDLE_INTERVAL_MIN_5,
     )
-    rows = response.get("candles", [])
+    # SDK normally returns {"candles": [...]}; tolerate a nested payload too,
+    # and surface useful diagnostics instead of a misleading generic error.
+    rows = response.get("candles", []) if isinstance(response, dict) else []
+    if not rows and isinstance(response, dict):
+        payload = response.get("payload")
+        if isinstance(payload, dict):
+            rows = payload.get("candles", [])
     if not rows:
-        raise RuntimeError("No NIFTY candles returned by Groww.")
+        keys = ", ".join(map(str, response.keys())) if isinstance(response, dict) else type(response).__name__
+        raise RuntimeError(
+            "Groww returned no NIFTY candles for the last 10 calendar days. "
+            f"Response fields/type: {keys}. Check Groww historical-data access and SDK/API response."
+        )
     parsed = []
     for row in rows:
         # Official examples return [epoch_seconds, open, high, low, close, volume].
